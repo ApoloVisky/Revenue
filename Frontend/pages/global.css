@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap');
+
+.dash-bg { background: #0b0c10; min-height: 100vh; position: relative; overflow-x: hidden; }
+.dash-bg::before { content: ''; position: fixed; inset: 0; background-image: linear-gradient(#2a2d3a 1px, transparent 1px), linear-gradient(90deg, #2a2d3a 1px, transparent 1px); background-size: 40px 40px; opacity: 0.3; pointer-events: none; }
+
+.dash-wrapper { position: relative; z-index: 1; max-width: 860px; margin: 0 auto; padding: 48px 24px; font-family: 'DM Sans', sans-serif; }
+.dash-eyebrow { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: #c8f135; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.dash-eyebrow::before { content: ''; display: inline-block; width: 24px; height: 2px; background: #c8f135; }
+.dash-h1 { font-family: 'Syne', sans-serif; font-size: clamp(2rem,5vw,3.2rem); font-weight: 800; letter-spacing: -.02em; color: #eef0f7; margin-bottom: 48px; }
+.dash-h1 span { color: #c8f135; }
+
+.input-card { background: #13141a; border: 1px solid #2a2d3a; border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+.input-label { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: #6b7090; margin-bottom: 10px; display: block; }
+.dash-textarea { width: 100%; background: #1c1e27; border: 1px solid #2a2d3a; border-radius: 10px; color: #eef0f7; font-family: 'DM Mono', monospace; font-size: 13px; line-height: 1.7; padding: 14px 16px; resize: vertical; min-height: 130px; outline: none; transition: border-color .2s; }
+.dash-textarea:focus { border-color: #c8f135; box-shadow: 0 0 0 3px rgba(200,241,53,.08); }
+
+.dash-btn { display: inline-flex; align-items: center; gap: 8px; margin-top: 16px; padding: 12px 28px; background: #c8f135; color: #0b0c10; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; border: none; border-radius: 8px; cursor: pointer; transition: transform .15s, box-shadow .15s; }
+.dash-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(200,241,53,.25); }
+
+.results-header { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: #6b7090; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+.results-header::after { content: ''; flex: 1; height: 1px; background: #2a2d3a; }
+
+.results-grid { display: grid; gap: 16px; }
+.card { background: #13141a; border: 1px solid #2a2d3a; border-radius: 16px; padding: 24px; display: grid; grid-template-columns: 1fr auto; gap: 16px; position: relative; overflow: hidden; transition: border-color .2s, transform .2s; }
+.card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #c8f135, #3bffc8); opacity: 0; transition: opacity .2s; }
+.card:hover { border-color: rgba(200,241,53,.3); transform: translateY(-2px); }
+.card:hover::before { opacity: 1; }
+
+.card-name { font-family: 'Syne', sans-serif; font-size: 1.2rem; font-weight: 700; color: #eef0f7; margin-bottom: 14px; }
+.card-fields { display: flex; flex-wrap: wrap; gap: 10px; }
+.field { background: #1c1e27; border: 1px solid #2a2d3a; border-radius: 8px; padding: 8px 12px; min-width: 130px; }
+.field-label { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: .15em; text-transform: uppercase; color: #6b7090; margin-bottom: 4px; }
+.field-value { font-size: 14px; font-weight: 500; color: #eef0f7; }
+.field-value.accent { font-family: 'DM Mono', monospace; color: #c8f135; font-size: 13px; }
+
+.badge-area { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.badge { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; }
+.badge-sim { background: rgba(59,255,200,.12); color: #3bffc8; border: 1px solid rgba(59,255,200,.25); }
+.badge-nao { background: rgba(255,77,109,.1); color: #ff4d6d; border: 1px solid rgba(255,77,109,.2); }
+
+.conf-wrap { margin-top: 12px; display: flex; align-items: center; gap: 10px; }
+.conf-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #6b7090; white-space: nowrap; }
+.conf-bar-bg { flex: 1; height: 4px; background: #1c1e27; border-radius: 99px; overflow: hidden; }
+.conf-bar-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #3bffc8, #c8f135); }
+.conf-pct { font-family: 'DM Mono', monospace; font-size: 11px; color: #c8f135; min-width: 34px; text-align: right; }
