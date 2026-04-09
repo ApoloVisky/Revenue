@@ -5,3 +5,9 @@ Frontend/node_modules/
 dist/
 build/
 .env
+node_modules/
+Frontend/node_modules/
+.next/
+dist/
+build/
+.env
