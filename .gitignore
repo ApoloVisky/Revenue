@@ -1,13 +1,15 @@
-backend/.env
-node_modules/
-Frontend/node_modules/
-.next/
-dist/
-build/
+# Python
+.venv/
+__pycache__/
+*.pyc
 .env
-node_modules/
+
+# Next.js
+Frontend/.next/
 Frontend/node_modules/
-.next/
-dist/
-build/
-.env
+Frontend/.env.local
+Frontend/.env.production
+
+# OS
+.DS_Store
+Thumbs.db
