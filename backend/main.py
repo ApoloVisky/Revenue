@@ -78,10 +78,10 @@ def log_search(user_id: str, companies: list):
         print(f"[LOG ERROR] {e}")
 
 # ----------------------------
-# CLIENTES E CONFIG
+# CONFIG
 # ----------------------------
-SERP_API_KEY    = os.getenv("SERP_API_KEY")
-APOLLO_API_KEY  = os.getenv("APOLLO_API_KEY")
+SERP_API_KEY   = os.getenv("SERP_API_KEY")
+APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
 
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
@@ -93,13 +93,13 @@ client = OpenAI(
 # CACHE
 # ----------------------------
 CACHE = {
-    "apollo":   {},   # cache Apollo por empresa
-    "search":   {},   # cache SerpAPI + Wikipedia
-    "company":  {},   # cache resultado final
+    "apollo":   {},
+    "search":   {},
+    "company":  {},
     "exchange": {"rate": None, "time": 0},
-    "ambig":    {},   # cache ambiguidade
+    "ambig":    {},
 }
-CACHE_TTL = 3600  # 1h
+CACHE_TTL = 3600
 
 # ----------------------------
 # UTILS
@@ -125,6 +125,204 @@ def safe_json_parse_list(content):
         print(f"[JSON LIST PARSE ERROR] {e}")
         return None
 
+INDUSTRY_MAP = {
+    "retail": "Varejo", "technology": "Tecnologia", "software": "Software",
+    "saas": "SaaS", "finance": "Financeiro", "banking": "Bancário",
+    "industrial": "Industrial", "manufacturing": "Manufatura",
+    "services": "Serviços", "health": "Saúde", "energy": "Energia",
+    "telecom": "Telecomunicações", "e-commerce": "E-commerce",
+    "information technology": "Tecnologia", "consumer goods": "Varejo",
+    "oil & gas": "Energia", "pharmaceuticals": "Saúde",
+    "food & beverages": "Alimentação", "automotive": "Automotivo",
+    "real estate": "Imobiliário", "education": "Educação",
+    "media": "Mídia", "transportation": "Transporte",
+}
+
+INDUSTRY_REVENUE_RANGES = {
+    "Tecnologia":       (100_000, 3_000_000_000_000),
+    "Software":         (100_000, 500_000_000_000),
+    "SaaS":             (100_000, 100_000_000_000),
+    "Varejo":           (500_000, 700_000_000_000),
+    "Energia":          (1_000_000, 500_000_000_000),
+    "Bancário":         (1_000_000, 200_000_000_000),
+    "Financeiro":       (1_000_000, 200_000_000_000),
+    "Saúde":            (500_000, 200_000_000_000),
+    "Industrial":       (500_000, 300_000_000_000),
+    "Manufatura":       (500_000, 300_000_000_000),
+    "Telecomunicações": (1_000_000, 200_000_000_000),
+    "Serviços":         (100_000, 100_000_000_000),
+    "E-commerce":       (500_000, 600_000_000_000),
+    "Alimentação":      (100_000, 100_000_000_000),
+    "Automotivo":       (1_000_000, 500_000_000_000),
+    "Educação":         (100_000, 50_000_000_000),
+    "Mídia":            (100_000, 50_000_000_000),
+    "Transporte":       (500_000, 100_000_000_000),
+}
+
+def translate_industry(industry):
+    if not industry:
+        return None
+    industry_lower = industry.lower()
+    for key, value in INDUSTRY_MAP.items():
+        if key in industry_lower:
+            return value
+    return industry.title()
+
+def validate_revenue_by_industry(revenue, industry_pt):
+    if not revenue or not industry_pt:
+        return revenue, False
+    range_ = INDUSTRY_REVENUE_RANGES.get(industry_pt)
+    if range_ and not (range_[0] <= revenue <= range_[1]):
+        print(f"[REVENUE SUSPEITO] {revenue:,.0f} fora do range para {industry_pt}")
+        return None, True
+    return revenue, False
+
+def classify_company(revenue):
+    if not revenue:
+        return "Desconhecido"
+    if revenue < 360_000:         return "Microempresa"
+    elif revenue < 4_800_000:     return "Pequena empresa"
+    elif revenue < 300_000_000:   return "Média empresa"
+    elif revenue < 1_000_000_000: return "Grande empresa"
+    else:                          return "Enterprise"
+
+def get_usd_brl_rate():
+    now = time.time()
+    if CACHE["exchange"]["rate"] and now - CACHE["exchange"]["time"] < CACHE_TTL:
+        return CACHE["exchange"]["rate"]
+    try:
+        res = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=5).json()
+        rate = res["rates"]["BRL"]
+        CACHE["exchange"] = {"rate": rate, "time": now}
+        return rate
+    except:
+        return 5.7
+
+def convert_to_brl(usd_value):
+    rate = get_usd_brl_rate()
+    return usd_value * rate if (rate and usd_value) else None
+
+def format_brl(value):
+    if not value:
+        return None
+    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def parse_apollo_revenue_range(range_str: str):
+    """Converte '$10M-$50M' para média em USD."""
+    if not range_str:
+        return None
+    try:
+        clean = re.sub(r'[\$,]', '', range_str.upper())
+        multipliers = {"T": 1_000_000_000_000, "B": 1_000_000_000, "M": 1_000_000, "K": 1_000}
+        numbers = []
+        for part in re.split(r'[-–]', clean):
+            part = part.strip()
+            m = re.match(r"([\d\.]+)([TBMK]?)", part)
+            if m:
+                val = float(m.group(1))
+                unit = m.group(2)
+                numbers.append(val * multipliers.get(unit, 1))
+        if numbers:
+            return sum(numbers) / len(numbers)
+    except Exception as e:
+        print(f"[APOLLO RANGE PARSE] {e}")
+    return None
+
+# ----------------------------
+# APOLLO (fonte principal)
+# ----------------------------
+def search_apollo(company: str) -> dict:
+    now = time.time()
+    cache_key = f"apollo_{company.lower()}"
+    if cache_key in CACHE["apollo"]:
+        cached = CACHE["apollo"][cache_key]
+        if now - cached["time"] < CACHE_TTL:
+            print(f"[APOLLO CACHE HIT] {company}")
+            return cached["data"]
+
+    if not APOLLO_API_KEY:
+        print("[APOLLO] Sem API key configurada")
+        return {}
+
+    try:
+        res = requests.post(
+            "https://api.apollo.io/api/v1/mixed_companies/search",
+            headers={"Content-Type": "application/json", "Cache-Control": "no-cache"},
+            json={
+                "api_key": APOLLO_API_KEY,
+                "q_organization_name": company,
+                "per_page": 5,
+            },
+            timeout=10
+        ).json()
+
+        orgs = res.get("organizations", [])
+        if not orgs:
+            print(f"[APOLLO] Nenhum resultado para: {company}")
+            CACHE["apollo"][cache_key] = {"data": {}, "time": now}
+            return {}
+
+        # escolhe o org com nome mais próximo
+        org = orgs[0]
+        for o in orgs:
+            if o.get("name", "").lower() == company.lower():
+                org = o
+                break
+
+        data = {
+            "name":          org.get("name"),
+            "employees":     org.get("estimated_num_employees"),
+            "industry":      org.get("industry"),
+            "city":          org.get("city"),
+            "country":       org.get("country"),
+            "linkedin":      org.get("linkedin_url"),
+            "website":       org.get("website_url"),
+            "founded":       org.get("founded_year"),
+            "revenue_range": org.get("annual_revenue_printed"),
+            "revenue_usd":   org.get("annual_revenue"),
+            "description":   org.get("short_description") or org.get("seo_description"),
+            "keywords":      org.get("keywords", []),
+        }
+
+        CACHE["apollo"][cache_key] = {"data": data, "time": now}
+        print(f"[APOLLO OK] {company} → employees={data['employees']}, revenue={data['revenue_usd']}, range={data['revenue_range']}")
+        return data
+
+    except Exception as e:
+        print(f"[APOLLO ERROR] {company}: {e}")
+        CACHE["apollo"][cache_key] = {"data": {}, "time": now}
+        return {}
+
+# ----------------------------
+# SERP (fallback apenas)
+# ----------------------------
+def search_serp_fallback(company: str) -> str:
+    """Chamado APENAS se Apollo não retornar revenue nem range."""
+    now = time.time()
+    if company in CACHE["search"]:
+        cached = CACHE["search"][company]
+        if now - cached["time"] < CACHE_TTL:
+            return cached["data"]
+
+    print(f"[SERP FALLBACK] Apollo sem revenue para: {company}")
+    snippets = []
+    try:
+        res = requests.get(
+            "https://serpapi.com/search",
+            params={"q": f"{company} annual revenue fiscal year 2024", "api_key": SERP_API_KEY},
+            timeout=10
+        ).json()
+        snippets = [r.get("snippet", "") for r in res.get("organic_results", [])[:5]]
+    except Exception as e:
+        print(f"[SERP ERROR] {e}")
+
+    text = " ".join(snippets)
+    CACHE["search"][company] = {"data": text, "time": now}
+    return text
+
+# ----------------------------
+# REVENUE FALLBACK (regex)
+# ----------------------------
 def extract_revenue_fallback(text):
     annual_patterns = [
         r"annual(?:ly)?\s+revenue[^\$\d]*\$?\s?([\d,\.]+)\s?(billion|million|trillion)",
@@ -151,163 +349,6 @@ def extract_revenue_fallback(text):
                 continue
     return None
 
-INDUSTRY_MAP = {
-    "retail": "Varejo", "technology": "Tecnologia", "software": "Software",
-    "saas": "SaaS", "finance": "Financeiro", "banking": "Bancário",
-    "industrial": "Industrial", "manufacturing": "Manufatura",
-    "services": "Serviços", "health": "Saúde", "energy": "Energia",
-    "telecom": "Telecomunicações", "e-commerce": "E-commerce",
-    "information technology": "Tecnologia", "consumer goods": "Varejo",
-    "oil & gas": "Energia", "pharmaceuticals": "Saúde",
-}
-
-INDUSTRY_REVENUE_RANGES = {
-    "Tecnologia":       (100_000, 3_000_000_000_000),
-    "Software":         (100_000, 500_000_000_000),
-    "SaaS":             (100_000, 100_000_000_000),
-    "Varejo":           (500_000, 700_000_000_000),
-    "Energia":          (1_000_000, 500_000_000_000),
-    "Bancário":         (1_000_000, 200_000_000_000),
-    "Financeiro":       (1_000_000, 200_000_000_000),
-    "Saúde":            (500_000, 200_000_000_000),
-    "Industrial":       (500_000, 300_000_000_000),
-    "Manufatura":       (500_000, 300_000_000_000),
-    "Telecomunicações": (1_000_000, 200_000_000_000),
-    "Serviços":         (100_000, 100_000_000_000),
-    "E-commerce":       (500_000, 600_000_000_000),
-}
-
-def translate_industry(industry):
-    if not industry:
-        return None
-    industry_lower = industry.lower()
-    for key, value in INDUSTRY_MAP.items():
-        if key in industry_lower:
-            return value
-    return industry.title()
-
-def validate_revenue_by_industry(revenue, industry_pt):
-    if not revenue or not industry_pt:
-        return revenue, False
-    range_ = INDUSTRY_REVENUE_RANGES.get(industry_pt)
-    if range_ and not (range_[0] <= revenue <= range_[1]):
-        print(f"[REVENUE SUSPEITO] {revenue:,.0f} fora do range para {industry_pt}")
-        return None, True
-    return revenue, False
-
-def classify_company(revenue):
-    if not revenue:
-        return "Desconhecido"
-    if revenue < 360_000:       return "Microempresa"
-    elif revenue < 4_800_000:   return "Pequena empresa"
-    elif revenue < 300_000_000: return "Média empresa"
-    elif revenue < 1_000_000_000: return "Grande empresa"
-    else:                        return "Enterprise"
-
-def get_usd_brl_rate():
-    now = time.time()
-    if CACHE["exchange"]["rate"] and now - CACHE["exchange"]["time"] < CACHE_TTL:
-        return CACHE["exchange"]["rate"]
-    try:
-        res = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=5).json()
-        rate = res["rates"]["BRL"]
-        CACHE["exchange"] = {"rate": rate, "time": now}
-        return rate
-    except:
-        return 5.7
-
-def convert_to_brl(usd_value):
-    rate = get_usd_brl_rate()
-    return usd_value * rate if (rate and usd_value) else None
-
-def format_brl(value):
-    if not value:
-        return None
-    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-# ----------------------------
-# APOLLO (com cache)
-# ----------------------------
-def search_apollo(company: str) -> dict:
-    """Busca dados estruturados da empresa no Apollo.io com cache."""
-    now = time.time()
-    cache_key = f"apollo_{company.lower()}"
-    if cache_key in CACHE["apollo"]:
-        cached = CACHE["apollo"][cache_key]
-        if now - cached["time"] < CACHE_TTL:
-            print(f"[APOLLO CACHE HIT] {company}")
-            return cached["data"]
-
-    if not APOLLO_API_KEY:
-        return {}
-
-    try:
-        res = requests.post(
-            "https://api.apollo.io/api/v1/mixed_companies/search",
-            headers={"Content-Type": "application/json", "Cache-Control": "no-cache"},
-            json={
-                "api_key": APOLLO_API_KEY,
-                "q_organization_name": company,
-                "per_page": 3,  # pega 3 pra escolher o mais relevante
-            },
-            timeout=10
-        ).json()
-
-        orgs = res.get("organizations", [])
-        if not orgs:
-            CACHE["apollo"][cache_key] = {"data": {}, "time": now}
-            return {}
-
-        # escolhe o org com nome mais próximo
-        org = orgs[0]
-        for o in orgs:
-            if o.get("name", "").lower() == company.lower():
-                org = o
-                break
-
-        data = {
-            "name":         org.get("name"),
-            "employees":    org.get("estimated_num_employees"),
-            "industry":     org.get("industry"),
-            "city":         org.get("city"),
-            "country":      org.get("country"),
-            "linkedin":     org.get("linkedin_url"),
-            "website":      org.get("website_url"),
-            "founded":      org.get("founded_year"),
-            "revenue_range":org.get("annual_revenue_printed"),  # ex: "$10M-$50M"
-            "revenue_usd":  org.get("annual_revenue"),          # número se disponível
-        }
-
-        CACHE["apollo"][cache_key] = {"data": data, "time": now}
-        print(f"[APOLLO] {company}: employees={data['employees']}, revenue={data['revenue_usd']}, range={data['revenue_range']}")
-        return data
-
-    except Exception as e:
-        print(f"[APOLLO ERROR] {company}: {e}")
-        CACHE["apollo"][cache_key] = {"data": {}, "time": now}
-        return {}
-
-def parse_apollo_revenue_range(range_str: str):
-    """Converte '10M-50M' ou '$10M-$50M' para a média em USD."""
-    if not range_str:
-        return None
-    try:
-        clean = re.sub(r'[\$,]', '', range_str.upper())
-        multipliers = {"T": 1_000_000_000_000, "B": 1_000_000_000, "M": 1_000_000, "K": 1_000}
-        numbers = []
-        for part in re.split(r'[-–]', clean):
-            part = part.strip()
-            m = re.match(r"([\d\.]+)([TBMK]?)", part)
-            if m:
-                val = float(m.group(1))
-                unit = m.group(2)
-                numbers.append(val * multipliers.get(unit, 1))
-        if numbers:
-            return sum(numbers) / len(numbers)  # média do range
-    except Exception as e:
-        print(f"[APOLLO RANGE PARSE] {e}")
-    return None
-
 # ----------------------------
 # AI
 # ----------------------------
@@ -331,190 +372,25 @@ def call_ai(prompt):
             time.sleep(1)
     return None
 
-def calculate_confidence(data, text, revenue_suspicious=False, apollo_data=None):
-    if not data:
-        return 0.1
-    score = 0.2 if data.get("estimated") else 0.5
-    if data.get("revenue"):   score += 0.1
-    if data.get("employees"): score += 0.1
-    if data.get("industry"):  score += 0.05
-    trusted = ["forbes", "statista", "bloomberg", "reuters", "yahoo finance"]
-    matches = sum(1 for s in trusted if s in text.lower())
-    score += min(matches * 0.05, 0.15)
-    if revenue_suspicious: score -= 0.2
-    # bônus se Apollo confirmou dados
-    if apollo_data:
-        if apollo_data.get("revenue_usd") or apollo_data.get("revenue_range"):
-            score += 0.1
-        if apollo_data.get("employees"):
-            score += 0.05
-    return round(max(0.0, min(score, 1.0)), 2)
-
-# ----------------------------
-# WIKIPEDIA
-# ----------------------------
-def search_wikipedia(company):
-    try:
-        res = requests.get(
-            f"https://en.wikipedia.org/api/rest_v1/page/summary/{company.replace(' ', '_')}",
-            timeout=5
-        ).json()
-        if res.get("type") == "standard":
-            return res.get("extract", "")
-        search_res = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "list": "search", "srsearch": company, "format": "json", "srlimit": 1},
-            timeout=5
-        ).json()
-        results = search_res.get("query", {}).get("search", [])
-        if results:
-            title = results[0]["title"]
-            page_res = requests.get(
-                f"https://en.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}",
-                timeout=5
-            ).json()
-            return page_res.get("extract", "")
-    except Exception as e:
-        print(f"[WIKIPEDIA ERROR] {company}: {e}")
-    return ""
-
-# ----------------------------
-# SEARCH COM QUERIES MÚLTIPLAS
-# ----------------------------
-def search_company_data(company):
-    now = time.time()
-    if company in CACHE["search"]:
-        cached = CACHE["search"][company]
-        if now - cached["time"] < CACHE_TTL:
-            return cached["data"]
-
-    queries = [
-        f"{company} annual revenue fiscal year 2024",
-        f"{company} faturamento receita anual 2024",
-    ]
-    all_snippets = []
-    for query in queries:
-        try:
-            res = requests.get(
-                "https://serpapi.com/search",
-                params={"q": query, "api_key": SERP_API_KEY},
-                timeout=10
-            ).json()
-            snippets = [r.get("snippet", "") for r in res.get("organic_results", [])[:3]]
-            all_snippets.extend(snippets)
-        except Exception as e:
-            print(f"[SERP ERROR] {query}: {e}")
-
-    wiki_text = search_wikipedia(company)
-    if wiki_text:
-        all_snippets.append(wiki_text)
-
-    text = " ".join(all_snippets)
-    CACHE["search"][company] = {"data": text, "time": now}
-    return text
-
-# ----------------------------
-# EXTRACTION COM FEW-SHOT
-# ----------------------------
-def extract_or_estimate(company, text, apollo_data=None):
-    if not text or len(text) < 50:
-        return None
-
-    # se Apollo tem revenue direto, usa ele
-    if apollo_data and apollo_data.get("revenue_usd"):
-        try:
-            rev = float(apollo_data["revenue_usd"])
-            if 10_000 <= rev <= 5_000_000_000_000:
-                print(f"[APOLLO REVENUE DIRECT] {company}: ${rev:,.0f}")
-                return {
-                    "revenue": rev,
-                    "employees": apollo_data.get("employees"),
-                    "industry": apollo_data.get("industry"),
-                    "estimated": False,
-                }
-        except:
-            pass
-
-    # se Apollo tem range de revenue, usa como base
-    apollo_revenue_hint = ""
-    if apollo_data and apollo_data.get("revenue_range"):
-        apollo_rev = parse_apollo_revenue_range(apollo_data["revenue_range"])
-        if apollo_rev:
-            apollo_revenue_hint = f"\nApollo.io data suggests revenue range: {apollo_data['revenue_range']} (≈ ${apollo_rev:,.0f} USD)\n"
-
-    # monta contexto extra do Apollo
-    apollo_context = ""
-    if apollo_data:
-        parts = []
-        if apollo_data.get("employees"):   parts.append(f"employees: {apollo_data['employees']}")
-        if apollo_data.get("industry"):    parts.append(f"industry: {apollo_data['industry']}")
-        if apollo_data.get("founded"):     parts.append(f"founded: {apollo_data['founded']}")
-        if apollo_data.get("country"):     parts.append(f"country: {apollo_data['country']}")
-        if parts:
-            apollo_context = f"\nApollo.io structured data: {', '.join(parts)}\n"
-
-    prompt = f"""Return ONLY a JSON object. No explanation, no markdown, no extra text.
-
-Examples:
-Text: "Apple reported annual revenue of $391 billion for fiscal year 2024, employing 150,000 people worldwide in technology."
-Output: {{"revenue": 391000000000, "employees": 150000, "industry": "Technology", "estimated": false}}
-
-Text: "Petrobras reported net revenue of R$502 billion in 2023. The Brazilian state oil company employs around 45,000 workers."
-Output: {{"revenue": 90000000000, "employees": 45000, "industry": "Energy", "estimated": true}}
-
-Text: "Magazine Luiza revenues around R$35 billion and 45,000 employees."
-Output: {{"revenue": 6300000000, "employees": 45000, "industry": "Retail", "estimated": true}}
-
-Text: "Q3 revenue of $2.5 billion in the software segment."
-Output: {{"revenue": 10000000000, "employees": null, "industry": "Software", "estimated": true}}
-
-Rules:
-- revenue must be ANNUAL (full year), never quarterly
-- revenue in USD as plain number (no symbols, no commas)
-- if only quarterly: multiply by 4, set estimated true
-- if revenue in BRL: divide by 5.7, set estimated true
-- use most recent fiscal year
-- prefer Apollo.io data when available and consistent with text
-- set estimated false ONLY if annual USD revenue explicitly stated
-{apollo_revenue_hint}{apollo_context}
-Return exactly:
-{{"revenue": <number or null>, "employees": <number or null>, "industry": "<string in English or null>", "estimated": <true or false>}}
-
-Company: {company}
-TEXT:
-{text}"""
-
-    content = call_ai(prompt)
-    if content:
-        parsed = safe_json_parse(content)
-        if parsed:
-            revenue = parsed.get("revenue")
-            if revenue is not None:
-                try:
-                    if not (10_000 <= float(revenue) <= 5_000_000_000_000):
-                        parsed["revenue"] = None
-                        parsed["estimated"] = True
-                except (TypeError, ValueError):
-                    parsed["revenue"] = None
-                    parsed["estimated"] = True
-
-            # se AI não encontrou employees mas Apollo tem, usa Apollo
-            if not parsed.get("employees") and apollo_data and apollo_data.get("employees"):
-                parsed["employees"] = apollo_data["employees"]
-
-            # mesma coisa pra industry
-            if not parsed.get("industry") and apollo_data and apollo_data.get("industry"):
-                parsed["industry"] = apollo_data["industry"]
-
-            return parsed
-
-    revenue = extract_revenue_fallback(text)
-    return {
-        "revenue": revenue,
-        "estimated": True,
-        "employees": apollo_data.get("employees") if apollo_data else None,
-        "industry": apollo_data.get("industry") if apollo_data else None,
+def calculate_confidence(revenue_source: str, apollo_data: dict, has_serp: bool) -> float:
+    """
+    revenue_source: 'apollo_direct' | 'apollo_range' | 'ai_from_serp' | 'regex' | 'none'
+    """
+    scores = {
+        "apollo_direct":  0.95,
+        "apollo_range":   0.75,
+        "ai_from_serp":   0.55,
+        "regex":          0.35,
+        "none":           0.1,
     }
+    score = scores.get(revenue_source, 0.1)
+
+    # bônus por dados complementares do Apollo
+    if apollo_data.get("employees"):  score = min(score + 0.02, 1.0)
+    if apollo_data.get("industry"):   score = min(score + 0.01, 1.0)
+    if apollo_data.get("founded"):    score = min(score + 0.01, 1.0)
+
+    return round(score, 2)
 
 # ----------------------------
 # AMBIGUIDADE
@@ -529,7 +405,7 @@ def detect_ambiguity(company):
 
     prompt = f"""The user is searching for a company named "{company}".
 
-Are there multiple well-known companies with this exact name or very similar names that could cause confusion?
+Are there multiple well-known companies with this exact name that could cause confusion?
 
 If YES, return a JSON array with up to 4 options:
 - "name": official company name
@@ -538,12 +414,7 @@ If YES, return a JSON array with up to 4 options:
 
 If NO ambiguity, return [].
 
-Return ONLY the JSON array.
-
-Examples:
-- "Apple" → []
-- "Ambev" → []
-- "Natura" → [{{"name": "Natura &Co", "description": "Brazilian cosmetics company", "country": "Brazil"}}, ...]"""
+Return ONLY the JSON array, no explanation."""
 
     content = call_ai(prompt)
     options = None
@@ -556,9 +427,9 @@ Examples:
     return options
 
 # ----------------------------
-# CORE
+# CORE — Apollo first
 # ----------------------------
-def process_company(company: str):
+def process_company(company: str) -> dict:
     now = time.time()
     if company in CACHE["company"]:
         cached = CACHE["company"][company]
@@ -567,36 +438,126 @@ def process_company(company: str):
             return cached["data"]
 
     try:
-        # busca em paralelo: SerpAPI+Wikipedia e Apollo
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_text   = executor.submit(search_company_data, company)
-            future_apollo = executor.submit(search_apollo, company)
-            text_data  = future_text.result()
-            apollo_data = future_apollo.result()
+        # 1. Apollo sempre primeiro
+        apollo = search_apollo(company)
 
-        data = extract_or_estimate(company, text_data, apollo_data)
-        revenue_usd  = data.get("revenue") if data else None
-        industry_pt  = translate_industry(data.get("industry") if data else None)
+        revenue_usd    = None
+        revenue_source = "none"
+        employees      = apollo.get("employees")
+        industry_raw   = apollo.get("industry")
+        estimated      = True
 
-        # validação por indústria
+        # 2. Apollo tem revenue direto?
+        if apollo.get("revenue_usd"):
+            try:
+                rev = float(apollo["revenue_usd"])
+                if 10_000 <= rev <= 5_000_000_000_000:
+                    revenue_usd    = rev
+                    revenue_source = "apollo_direct"
+                    estimated      = False
+                    print(f"[REVENUE] Apollo direto: ${rev:,.0f}")
+            except:
+                pass
+
+        # 3. Apollo tem range? (ex: "$10M-$50M")
+        if not revenue_usd and apollo.get("revenue_range"):
+            rev = parse_apollo_revenue_range(apollo["revenue_range"])
+            if rev and 10_000 <= rev <= 5_000_000_000_000:
+                revenue_usd    = rev
+                revenue_source = "apollo_range"
+                estimated      = True
+                print(f"[REVENUE] Apollo range '{apollo['revenue_range']}': ${rev:,.0f}")
+
+        # 4. Fallback: SerpAPI + AI
+        if not revenue_usd:
+            serp_text = search_serp_fallback(company)
+            if serp_text and len(serp_text) > 50:
+                # monta contexto Apollo pro AI
+                apollo_ctx = ""
+                if apollo:
+                    parts = []
+                    if employees:    parts.append(f"employees: {employees}")
+                    if industry_raw: parts.append(f"industry: {industry_raw}")
+                    if apollo.get("founded"): parts.append(f"founded: {apollo['founded']}")
+                    if apollo.get("country"): parts.append(f"country: {apollo['country']}")
+                    if parts:
+                        apollo_ctx = f"\nApollo.io data: {', '.join(parts)}\n"
+
+                prompt = f"""Return ONLY a JSON object. No explanation, no markdown.
+
+Examples:
+Text: "Apple annual revenue $391 billion fiscal 2024, 150,000 employees, technology."
+Output: {{"revenue": 391000000000, "employees": 150000, "industry": "Technology", "estimated": false}}
+
+Text: "Petrobras net revenue R$502 billion 2023, 45,000 workers, oil."
+Output: {{"revenue": 90000000000, "employees": 45000, "industry": "Energy", "estimated": true}}
+
+Text: "Q3 revenue $2.5 billion software."
+Output: {{"revenue": 10000000000, "employees": null, "industry": "Software", "estimated": true}}
+
+Rules:
+- revenue ANNUAL in USD, plain number
+- quarterly → multiply by 4, estimated true
+- BRL → divide by 5.7, estimated true
+- use most recent fiscal year
+{apollo_ctx}
+Return: {{"revenue": <number or null>, "employees": <number or null>, "industry": "<English string or null>", "estimated": <true or false>}}
+
+Company: {company}
+TEXT: {serp_text}"""
+
+                content = call_ai(prompt)
+                if content:
+                    parsed = safe_json_parse(content)
+                    if parsed and parsed.get("revenue"):
+                        try:
+                            rev = float(parsed["revenue"])
+                            if 10_000 <= rev <= 5_000_000_000_000:
+                                revenue_usd    = rev
+                                revenue_source = "ai_from_serp"
+                                estimated      = parsed.get("estimated", True)
+                                if not employees and parsed.get("employees"):
+                                    employees = parsed["employees"]
+                                if not industry_raw and parsed.get("industry"):
+                                    industry_raw = parsed["industry"]
+                                print(f"[REVENUE] AI from SERP: ${rev:,.0f}")
+                        except:
+                            pass
+
+                # regex como último recurso
+                if not revenue_usd:
+                    rev = extract_revenue_fallback(serp_text)
+                    if rev:
+                        revenue_usd    = rev
+                        revenue_source = "regex"
+                        estimated      = True
+                        print(f"[REVENUE] Regex fallback: ${rev:,.0f}")
+
+        # 5. industry e validação
+        industry_pt = translate_industry(industry_raw)
         revenue_usd, suspicious = validate_revenue_by_industry(revenue_usd, industry_pt)
+        if suspicious:
+            revenue_source = "none"
+
         revenue_brl = convert_to_brl(revenue_usd)
 
         response = {
-            "empresa":        company,
+            "empresa":         company,
             "faturamento_usd": revenue_usd,
             "faturamento_brl": format_brl(revenue_brl),
-            "estimado":       data.get("estimated", True) if data else True,
-            "funcionarios":   data.get("employees") if data else None,
-            "industria":      industry_pt,
-            "confianca":      calculate_confidence(data, text_data, suspicious, apollo_data),
-            "classificacao":  classify_company(revenue_brl),
-            # campos extras do Apollo
-            "cidade":         apollo_data.get("city"),
-            "pais":           apollo_data.get("country"),
-            "linkedin":       apollo_data.get("linkedin"),
-            "website":        apollo_data.get("website"),
-            "fundada":        apollo_data.get("founded"),
+            "estimado":        estimated,
+            "funcionarios":    employees,
+            "industria":       industry_pt,
+            "confianca":       calculate_confidence(revenue_source, apollo, revenue_source != "none"),
+            "classificacao":   classify_company(revenue_brl),
+            "fonte":           revenue_source,
+            # campos Apollo extras
+            "cidade":          apollo.get("city"),
+            "pais":            apollo.get("country"),
+            "linkedin":        apollo.get("linkedin"),
+            "website":         apollo.get("website"),
+            "fundada":         apollo.get("founded"),
+            "descricao":       apollo.get("description"),
         }
 
         CACHE["company"][company] = {"data": response, "time": now}
@@ -609,7 +570,9 @@ def process_company(company: str):
 def build_csv(results: list) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Empresa", "Receita (BRL)", "Receita (USD)", "Funcionários", "Indústria", "Classificação", "Confiança", "Estimado", "Cidade", "País", "LinkedIn", "Website", "Fundada"])
+    writer.writerow(["Empresa", "Receita (BRL)", "Receita (USD)", "Funcionários", "Indústria",
+                     "Classificação", "Confiança", "Estimado", "Fonte",
+                     "Cidade", "País", "Website", "LinkedIn", "Fundada"])
     for r in results:
         writer.writerow([
             r.get("empresa", ""),
@@ -620,10 +583,11 @@ def build_csv(results: list) -> str:
             r.get("classificacao") or "N/A",
             f"{round(r.get('confianca', 0) * 100)}%" if r.get("confianca") else "N/A",
             "Sim" if r.get("estimado") else "Não",
+            r.get("fonte") or "N/A",
             r.get("cidade") or "N/A",
             r.get("pais") or "N/A",
-            r.get("linkedin") or "N/A",
             r.get("website") or "N/A",
+            r.get("linkedin") or "N/A",
             r.get("fundada") or "N/A",
         ])
     output.seek(0)
@@ -726,7 +690,7 @@ def disambiguate(request: Request, company: str, user=Depends(get_current_user))
     return {"ambiguous": options is not None, "options": options or []}
 
 # ----------------------------
-# ENDPOINTS ADMIN
+# ADMIN
 # ----------------------------
 @app.get("/admin/users")
 @limiter.limit("20/minute")
@@ -764,7 +728,7 @@ def admin_delete_user(request: Request, user_id: str, user=Depends(get_admin_use
     return {"message": "Usuário removido."}
 
 # ----------------------------
-# ENDPOINTS PROTEGIDOS
+# PROTEGIDOS
 # ----------------------------
 @app.get("/company")
 @limiter.limit("20/minute")
