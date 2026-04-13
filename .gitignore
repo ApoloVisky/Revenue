@@ -13,3 +13,5 @@ Frontend/.env.production
 # OS
 .DS_Store
 Thumbs.db
+~/.bash_profile
+~/.zshrc
