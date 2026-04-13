@@ -764,3 +764,47 @@ def batch_export(request: Request, companies: list[str], user=Depends(get_curren
     log_search(user["id"], companies)
     csv_content = build_csv(results)
     return StreamingResponse(iter([csv_content]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=empresas.csv"})
+
+    @app.get("/debug/apollo")
+def debug_apollo(request: Request, company: str, user=Depends(get_current_user)):
+    """Endpoint temporário para ver resposta bruta do Apollo."""
+    # limpa cache pra forçar nova chamada
+    cache_key = f"apollo_{company.lower()}"
+    if cache_key in CACHE["apollo"]:
+        del CACHE["apollo"][cache_key]
+    
+    if not APOLLO_API_KEY:
+        return {"error": "APOLLO_API_KEY não configurada"}
+    
+    try:
+        res = requests.post(
+            "https://api.apollo.io/api/v1/mixed_companies/search",
+            headers={"Content-Type": "application/json", "Cache-Control": "no-cache"},
+            json={
+                "api_key": APOLLO_API_KEY,
+                "q_organization_name": company,
+                "per_page": 3,
+            },
+            timeout=10
+        ).json()
+        
+        orgs = res.get("organizations", [])
+        
+        # retorna os campos relevantes de cada org
+        return {
+            "total_found": len(orgs),
+            "organizations": [
+                {
+                    "name":                  o.get("name"),
+                    "industry":              o.get("industry"),
+                    "estimated_num_employees": o.get("estimated_num_employees"),
+                    "annual_revenue":        o.get("annual_revenue"),
+                    "annual_revenue_printed": o.get("annual_revenue_printed"),
+                    "country":               o.get("country"),
+                    "website":               o.get("website_url"),
+                }
+                for o in orgs
+            ]
+        }
+    except Exception as e:
+        return {"error": str(e)}
