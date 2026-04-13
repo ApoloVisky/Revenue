@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 
-const API = "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "revenue.railway.internal";
 
 export default function Home() {
   const [screen, setScreen] = useState("login");
