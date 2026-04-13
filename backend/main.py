@@ -636,6 +636,11 @@ def batch(request: Request, companies: list[str], user=Depends(get_current_user)
     return results
 
 @app.post("/batch/export")
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler():
+    return {}
+    
 @limiter.limit("10/minute")
 def batch_export(request: Request, companies: list[str], user=Depends(get_current_user)):
     remaining = user["credits_limit"] - user["credits_used"]
