@@ -765,13 +765,9 @@ def batch_export(request: Request, companies: list[str], user=Depends(get_curren
     csv_content = build_csv(results)
     return StreamingResponse(iter([csv_content]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=empresas.csv"})
 
-    @app.get("/debug/apollo")
+@app.get("/debug/apollo")
+@limiter.limit("10/minute")
 def debug_apollo(request: Request, company: str, user=Depends(get_current_user)):
-    """Endpoint temporário para ver resposta bruta do Apollo."""
-    # limpa cache pra forçar nova chamada
-    cache_key = f"apollo_{company.lower()}"
-    if cache_key in CACHE["apollo"]:
-        del CACHE["apollo"][cache_key]
     
     if not APOLLO_API_KEY:
         return {"error": "APOLLO_API_KEY não configurada"}
