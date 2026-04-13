@@ -438,45 +438,69 @@ TEXT:
 # ----------------------------
 # CORE
 # ----------------------------
+def estimate_revenue_by_employees(employees, industry):
+    if not employees:
+        return None
+
+    industry_multiplier = {
+        "Tecnologia": 200_000,
+        "Software": 180_000,
+        "SaaS": 150_000,
+        "Varejo": 80_000,
+        "Serviços": 60_000,
+        "Industrial": 120_000,
+    }
+
+    base = industry_multiplier.get(industry, 100_000)
+    return employees * base
+
+
 def process_company(company: str):
     now = time.time()
+
     if company in CACHE["company"]:
         cached = CACHE["company"][company]
         if now - cached["time"] < CACHE_TTL:
             return cached["data"]
+
     try:
         text_data = search_company_data(company)
-        data = extract_or_estimate(company, text_data)
+        data = extract_or_estimate(company, text_data) or {}
+
+        # ✅ inicialização segura
+        revenue_usd = data.get("revenue")
+        employees = data.get("employees")
+        industry_pt = translate_industry(data.get("industry"))
+
+        # ✅ fallback por funcionários
         if not revenue_usd:
-            revenue_usd = estimate_revenue_by_employees(
-            data.get("employees"),
-            industry_pt
-            )
-        if revenue_usd:
-            data["estimated"] = True
+            revenue_usd = estimate_revenue_by_employees(employees, industry_pt)
+            if revenue_usd:
+                data["estimated"] = True
 
-        industry_pt = translate_industry(data.get("industry") if data else None)
-
-        # validação por indústria
+        # ✅ validação por indústria
         revenue_usd, suspicious = validate_revenue_by_industry(revenue_usd, industry_pt)
+
         revenue_brl = convert_to_brl(revenue_usd)
 
         response = {
             "empresa": company,
             "faturamento_usd": revenue_usd,
             "faturamento_brl": format_brl(revenue_brl),
-            "estimado": data.get("estimated", True) if data else True,
-            "funcionarios": data.get("employees") if data else None,
+            "estimado": data.get("estimated", True),
+            "funcionarios": employees,
             "industria": industry_pt,
             "confianca": calculate_confidence(data, text_data, suspicious),
             "classificacao": classify_company(revenue_brl),
         }
+
         CACHE["company"][company] = {"data": response, "time": now}
         return response
+
     except Exception as e:
         print(f"[COMPANY ERROR] {company}: {e}")
         return {"empresa": company, "erro": str(e)}
-
+        
 def build_csv(results: list) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
