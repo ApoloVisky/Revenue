@@ -16,9 +16,6 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-password_hash = pwd_context.hash(body.password)
-if not pwd_context.verify(body.password, user["password_hash"]):
-    
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
@@ -517,7 +514,7 @@ def register(request: Request, body: RegisterBody):
     existing = supabase.table("users").select("id").eq("email", body.email).execute()
     if existing.data:
         raise HTTPException(status_code=400, detail="Email já cadastrado.")
-    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
+    password_hash = pwd_context.hash(body.password)
     res = supabase.table("users").insert({"email": body.email, "password_hash": password_hash}).execute()
     user = res.data[0]
     return {"message": "Conta criada com sucesso.", "api_key": user["api_key"], "plan": user["plan"], "credits_limit": user["credits_limit"]}
@@ -531,7 +528,7 @@ def login(request: Request, body: LoginBody):
     user = res.data[0]
     if not user.get("password_hash"):
         raise HTTPException(status_code=401, detail="Email ou senha incorretos.")
-    if not bcrypt.checkpw(body.password.encode(), user["password_hash"].encode()):
+    if not pwd_context.verify(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Email ou senha incorretos.")
     return {
         "api_key": user["api_key"], "email": user["email"], "plan": user["plan"],
