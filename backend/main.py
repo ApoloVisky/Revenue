@@ -1,3 +1,4 @@
+# (mantive imports iguais)
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +10,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from passlib.context import CryptContext
-import time, requests, os, json, re, csv, io
+import time, requests, os, csv, io
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from pathlib import Path
@@ -20,34 +21,30 @@ from pathlib import Path
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
+app = FastAPI()
+
 # ----------------------------
 # RATE LIMIT
 # ----------------------------
-def get_key(request: Request):
-    if request.method == "OPTIONS":
-        return None
-    return get_remote_address(request)
-
-limiter = Limiter(key_func=get_key)
-app = FastAPI()
+limiter = Limiter(key_func=get_remote_address)
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={"detail": "Muitas requisições"})
 
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+# ----------------------------
+# CORS
+# ----------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://revenue-tau.vercel.app",
-        "http://localhost:3000"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.state.limiter = limiter
-app.add_middleware(SlowAPIMiddleware)
 
 # ----------------------------
 # SUPABASE
@@ -61,33 +58,34 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 
 def get_current_user(api_key: str = Depends(api_key_header)):
     res = supabase.table("users").select("*").eq("api_key", api_key).execute()
+
     if not res.data:
-        raise HTTPException(status_code=403, detail="API key inválida")
+        raise HTTPException(403, "API key inválida")
 
     user = res.data[0]
 
     if user["credits_used"] >= user["credits_limit"]:
-        raise HTTPException(status_code=429, detail="Limite de créditos atingido")
+        raise HTTPException(429, "Limite de créditos atingido")
 
     return user
 
 def get_admin_user(user=Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Acesso restrito")
+    if user["role"] != "admin":
+        raise HTTPException(403, "Acesso restrito")
     return user
 
+# ----------------------------
+# CRÉDITOS
+# ----------------------------
 def consume_credit(user_id: str):
     supabase.rpc("increment_credits", {"user_id_input": user_id}).execute()
 
 def log_search(user_id: str, companies: list):
-    try:
-        supabase.table("search_logs").insert({
-            "user_id": user_id,
-            "companies": companies,
-            "count": len(companies)
-        }).execute()
-    except Exception as e:
-        print(e)
+    supabase.table("search_logs").insert({
+        "user_id": user_id,
+        "companies": companies,
+        "count": len(companies)
+    }).execute()
 
 # ----------------------------
 # CONFIG
@@ -95,87 +93,10 @@ def log_search(user_id: str, companies: list):
 SERP_API_KEY = os.getenv("SERP_API_KEY")
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
 
-CACHE = {
-    "search": {},
-    "company": {},
-    "exchange": {"rate": None, "time": 0}
-}
-CACHE_TTL = 3600
-
-# ----------------------------
-# UTILS
-# ----------------------------
-def extract_revenue_fallback(text):
-    patterns = [
-        r"\$?\s?([\d,\.]+)\s?(billion|million|trillion)"
-    ]
-
-    multipliers = {
-        "million": 1_000_000,
-        "billion": 1_000_000_000,
-        "trillion": 1_000_000_000_000
-    }
-
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            value = float(match.group(1).replace(",", ""))
-            unit = match.group(2).lower()
-            return value * multipliers.get(unit, 1)
-
-    return None
-
-def estimate_revenue_by_employees(employees, industry):
-    if not employees:
-        return None
-
-    base = {
-        "Tecnologia": 200_000,
-        "Software": 180_000,
-        "Varejo": 80_000
-    }
-
-    return employees * base.get(industry, 100_000)
-
-def get_usd_brl_rate():
-    now = time.time()
-
-    if CACHE["exchange"]["rate"] and now - CACHE["exchange"]["time"] < CACHE_TTL:
-        return CACHE["exchange"]["rate"]
-
-    try:
-        res = requests.get("https://api.exchangerate-api.com/v4/latest/USD").json()
-        rate = res["rates"]["BRL"]
-        CACHE["exchange"] = {"rate": rate, "time": now}
-        return rate
-    except:
-        return 5.7
-
-def convert_to_brl(value):
-    rate = get_usd_brl_rate()
-    return value * rate if value else None
-
-def format_brl(v):
-    if not v:
-        return None
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-def classify_company(v):
-    if not v:
-        return "Desconhecido"
-    if v < 360_000:
-        return "Micro"
-    elif v < 4_800_000:
-        return "Pequena"
-    elif v < 300_000_000:
-        return "Média"
-    else:
-        return "Grande"
-
 # ----------------------------
 # APOLLO
 # ----------------------------
-def search_apollo_company(company):
+def search_apollo(company):
     try:
         res = requests.post(
             "https://api.apollo.io/api/v1/mixed_companies/search",
@@ -183,105 +104,78 @@ def search_apollo_company(company):
                 "api_key": APOLLO_API_KEY,
                 "q_organization_name": company,
                 "per_page": 1
-            },
-            timeout=10
+            }
         ).json()
 
-        orgs = res.get("organizations", [])
-        if not orgs:
-            return {}
-
-        c = orgs[0]
+        org = res.get("organizations", [{}])[0]
 
         return {
-            "employees": c.get("estimated_num_employees"),
-            "industry": c.get("industry"),
-            "city": c.get("city"),
-            "country": c.get("country"),
-            "linkedin": c.get("linkedin_url"),
+            "employees": org.get("estimated_num_employees"),
+            "industry": org.get("industry"),
+            "city": org.get("city"),
+            "country": org.get("country"),
+            "linkedin": org.get("linkedin_url"),
         }
 
-    except Exception as e:
-        print(e)
+    except:
         return {}
 
 # ----------------------------
 # SEARCH
 # ----------------------------
-def search_company_data(company):
-    if company in CACHE["search"]:
-        return CACHE["search"][company]["data"]
+def search_company(company):
+    try:
+        res = requests.get(
+            "https://serpapi.com/search",
+            params={"q": company + " revenue", "api_key": SERP_API_KEY}
+        ).json()
 
-    queries = [
-        f"{company} annual revenue",
-        f"{company} employees company"
-    ]
+        return " ".join([r.get("snippet", "") for r in res.get("organic_results", [])[:3]])
+    except:
+        return ""
 
-    text = ""
-
-    for q in queries:
-        try:
-            res = requests.get(
-                "https://serpapi.com/search",
-                params={"q": q, "api_key": SERP_API_KEY}
-            ).json()
-
-            for r in res.get("organic_results", [])[:3]:
-                text += r.get("snippet", "") + " "
-
-        except:
-            pass
-
-    CACHE["search"][company] = {"data": text, "time": time.time()}
-    return text
+def extract_revenue(text):
+    import re
+    match = re.search(r"([\d\.]+)\s?(billion|million)", text, re.IGNORECASE)
+    if match:
+        val = float(match.group(1))
+        if "billion" in match.group(2).lower():
+            return val * 1e9
+        return val * 1e6
+    return None
 
 # ----------------------------
 # PROCESS
 # ----------------------------
 def process_company(company):
-    if company in CACHE["company"]:
-        return CACHE["company"][company]["data"]
+    text = search_company(company)
+    apollo = search_apollo(company)
 
-    text = search_company_data(company)
-    apollo = search_apollo_company(company)
-
-    revenue = extract_revenue_fallback(text)
+    revenue = extract_revenue(text)
     employees = apollo.get("employees")
 
     if not revenue and employees:
-        revenue = estimate_revenue_by_employees(employees, "Tecnologia")
+        revenue = employees * 100000
 
-    brl = convert_to_brl(revenue)
-
-    result = {
+    return {
         "empresa": company,
-        "faturamento_usd": revenue,
-        "faturamento_brl": format_brl(brl),
+        "faturamento": revenue,
         "funcionarios": employees,
         "cidade": apollo.get("city"),
         "pais": apollo.get("country"),
         "linkedin": apollo.get("linkedin"),
-        "classificacao": classify_company(brl)
     }
-
-    CACHE["company"][company] = {"data": result, "time": time.time()}
-    return result
 
 # ----------------------------
 # CSV
 # ----------------------------
-def build_csv(results):
+def build_csv(data):
     output = io.StringIO()
     writer = csv.writer(output)
+    writer.writerow(["Empresa", "Receita", "Funcionários"])
 
-    writer.writerow(["Empresa", "Receita BRL", "Receita USD"])
-
-    for r in results:
-        writer.writerow([
-            r["empresa"],
-            r["faturamento_brl"],
-            r["faturamento_usd"]
-        ])
+    for r in data:
+        writer.writerow([r["empresa"], r["faturamento"], r["funcionarios"]])
 
     output.seek(0)
     return output.getvalue()
@@ -297,8 +191,17 @@ class LoginBody(BaseModel):
     email: str
     password: str
 
+class AddCreditsBody(BaseModel):
+    user_id: str
+    credits: int
+
+class UpdatePlanBody(BaseModel):
+    user_id: str
+    plan: str
+    credits_limit: int
+
 # ----------------------------
-# ROUTES
+# AUTH ROUTES
 # ----------------------------
 @app.post("/register")
 def register(body: RegisterBody):
@@ -325,10 +228,18 @@ def login(body: LoginBody):
 
     return user
 
+# ----------------------------
+# USER ROUTES
+# ----------------------------
+@app.get("/me")
+def me(user=Depends(get_current_user)):
+    return user
+
 @app.get("/company")
 def company(company: str, user=Depends(get_current_user)):
     result = process_company(company)
     consume_credit(user["id"])
+    log_search(user["id"], [company])
     return result
 
 @app.post("/batch")
@@ -338,15 +249,49 @@ def batch(companies: list[str], user=Depends(get_current_user)):
     for _ in companies:
         consume_credit(user["id"])
 
+    log_search(user["id"], companies)
     return results
 
 @app.post("/batch/export")
 def export(companies: list[str], user=Depends(get_current_user)):
     results = [process_company(c) for c in companies]
-    csv_file = build_csv(results)
+    csv_data = build_csv(results)
 
     return StreamingResponse(
-        iter([csv_file]),
+        iter([csv_data]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=data.csv"}
+        headers={"Content-Disposition": "attachment; filename=empresas.csv"}
     )
+
+# ----------------------------
+# ADMIN
+# ----------------------------
+@app.get("/admin/users")
+def list_users(admin=Depends(get_admin_user)):
+    return supabase.table("users").select("*").execute().data
+
+@app.post("/admin/credits")
+def add_credits(body: AddCreditsBody, admin=Depends(get_admin_user)):
+    user = supabase.table("users").select("*").eq("id", body.user_id).execute().data[0]
+
+    new_limit = user["credits_limit"] + body.credits
+
+    supabase.table("users").update({
+        "credits_limit": new_limit
+    }).eq("id", body.user_id).execute()
+
+    return {"novo_limite": new_limit}
+
+@app.post("/admin/plan")
+def update_plan(body: UpdatePlanBody, admin=Depends(get_admin_user)):
+    supabase.table("users").update({
+        "plan": body.plan,
+        "credits_limit": body.credits_limit
+    }).eq("id", body.user_id).execute()
+
+    return {"ok": True}
+
+@app.delete("/admin/users/{user_id}")
+def delete_user(user_id: str, admin=Depends(get_admin_user)):
+    supabase.table("users").delete().eq("id", user_id).execute()
+    return {"deleted": True}
