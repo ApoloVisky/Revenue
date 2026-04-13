@@ -27,7 +27,9 @@ def get_key_skip_options(request: Request):
         return "options-preflight"
     return get_remote_address(request)
 
-limiter = Limiter(key_func=get_key_skip_options)
+limiter = Limiter(
+    key_func=lambda request: get_remote_address(request) if request.method != "OPTIONS" else "skip"
+)
 app = FastAPI()
 
 @app.exception_handler(RateLimitExceeded)
@@ -640,7 +642,7 @@ def batch(request: Request, companies: list[str], user=Depends(get_current_user)
 @app.options("/{rest_of_path:path}")
 async def preflight_handler():
     return {}
-    
+
 @limiter.limit("10/minute")
 def batch_export(request: Request, companies: list[str], user=Depends(get_current_user)):
     remaining = user["credits_limit"] - user["credits_used"]
