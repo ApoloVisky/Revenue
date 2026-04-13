@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "https://revenue-production.up.railway.app";
+const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export default function Home() {
   const [screen, setScreen] = useState("login");
@@ -32,14 +32,14 @@ export default function Home() {
 
   const fetchCredits = async (key) => {
     try {
-      const res = await axios.get(`${API}/me`, { headers: { "X-API-Key": key } });
+      const res = await axios.get(`${API_URL}/me`, { headers: { "X-API-Key": key } });
       setCredits(res.data);
     } catch { setCredits(null); }
   };
 
   const fetchDashboard = async (key) => {
     try {
-      const res = await axios.get(`${API}/dashboard`, { headers: { "X-API-Key": key } });
+      const res = await axios.get(`${API_URL}/dashboard`, { headers: { "X-API-Key": key } });
       setDashData(res.data);
     } catch { setDashData(null); }
   };
@@ -47,7 +47,7 @@ export default function Home() {
   const fetchAdminUsers = async () => {
     setAdminLoading(true);
     try {
-      const res = await axios.get(`${API}/admin/users`, { headers: headers() });
+      const res = await axios.get(`${API_URL}/admin/users`, { headers: headers() });
       setAdminUsers(res.data);
     } catch { setAdminUsers([]); }
     finally { setAdminLoading(false); }
@@ -62,7 +62,7 @@ export default function Home() {
     if (!email.trim() || !password.trim()) { setError("Preencha email e senha."); return; }
     setError(""); setLoading(true);
     try {
-      const res = await axios.post(`${API}/login`, { email: email.trim(), password: password.trim() });
+      const res = await axios.post(`${API_URL}/login`, { email: email.trim(), password: password.trim() });
       setApiKey(res.data.api_key);
       setRole(res.data.role);
       setCredits(res.data);
@@ -78,7 +78,7 @@ export default function Home() {
     if (password.length < 6) { setError("Senha deve ter ao menos 6 caracteres."); return; }
     setError(""); setLoading(true);
     try {
-      const res = await axios.post(`${API}/register`, { email: email.trim(), password: password.trim() });
+      const res = await axios.post(`${API_URL}/register`, { email: email.trim(), password: password.trim() });
       setApiKey(res.data.api_key);
       setRole("user");
       await fetchCredits(res.data.api_key);
@@ -91,7 +91,7 @@ export default function Home() {
   const runBatch = async (companies) => {
     setLoading(true);
     try {
-      const res = await axios.post(`${API}/batch`, companies, { headers: headers() });
+      const res = await axios.post(`${API_URL}/batch`, companies, { headers: headers() });
       setResults(res.data);
       fetchCredits(apiKey);
       fetchDashboard(apiKey);
@@ -111,7 +111,7 @@ export default function Home() {
       const ambiguousFound = [];
       for (const company of companies) {
         try {
-          const res = await axios.get(`${API}/disambiguate`, {
+          const res = await axios.get(`${API_URL}/disambiguate`, {
             params: { company },
             headers: headers(),
           });
@@ -159,7 +159,7 @@ export default function Home() {
     const amount = parseInt(creditInputs[userId] || "0");
     if (!amount || amount <= 0) return;
     try {
-      await axios.post(`${API}/admin/credits`, { user_id: userId, credits: amount }, { headers: headers() });
+      await axios.post(`${API_URL}/admin/credits`, { user_id: userId, credits: amount }, { headers: headers() });
       setAdminMsg(`✓ ${amount} créditos adicionados.`);
       setCreditInputs((prev) => ({ ...prev, [userId]: "" }));
       fetchAdminUsers();
@@ -169,7 +169,7 @@ export default function Home() {
 
   const handleUpdatePlan = async (userId, plan, creditsLimit) => {
     try {
-      await axios.post(`${API}/admin/plan`, { user_id: userId, plan, credits_limit: creditsLimit }, { headers: headers() });
+      await axios.post(`${API_URL}/admin/plan`, { user_id: userId, plan, credits_limit: creditsLimit }, { headers: headers() });
       setAdminMsg(`✓ Plano atualizado para ${plan}.`);
       fetchAdminUsers();
       setTimeout(() => setAdminMsg(""), 3000);
@@ -179,7 +179,7 @@ export default function Home() {
   const handleDeleteUser = async (userId, userEmail) => {
     if (!confirm(`Remover ${userEmail}?`)) return;
     try {
-      await axios.delete(`${API}/admin/users/${userId}`, { headers: headers() });
+      await axios.delete(`${API_URL}/admin/users/${userId}`, { headers: headers() });
       setAdminMsg("✓ Usuário removido.");
       fetchAdminUsers();
       setTimeout(() => setAdminMsg(""), 3000);
