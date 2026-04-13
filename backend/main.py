@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+password_hash = pwd_context.hash(body.password)
+if not pwd_context.verify(body.password, user["password_hash"]):
+    
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
