@@ -341,6 +341,7 @@ Examples:
 # ----------------------------
 def search_company_data(company):
     now = time.time()
+
     if company in CACHE["search"]:
         cached = CACHE["search"][company]
         if now - cached["time"] < CACHE_TTL:
@@ -352,6 +353,8 @@ def search_company_data(company):
     ]
 
     all_snippets = []
+
+    
     for query in queries:
         try:
             res = requests.get(
@@ -359,17 +362,25 @@ def search_company_data(company):
                 params={"q": query, "api_key": SERP_API_KEY},
                 timeout=10
             ).json()
+
             snippets = [r.get("snippet", "") for r in res.get("organic_results", [])[:3]]
             all_snippets.extend(snippets)
+
         except Exception as e:
             print(f"[SERP ERROR] {query}: {e}")
 
-    # Wikipedia gratuita
+    
     wiki_text = search_wikipedia(company)
     if wiki_text:
         all_snippets.append(wiki_text)
 
+    # 🚀 APOLLO (NOVO)
+    apollo_text = search_apollo_company(company)
+    if apollo_text:
+        all_snippets.append(apollo_text)
+
     text = " ".join(all_snippets)
+
     CACHE["search"][company] = {"data": text, "time": now}
     return text
 
@@ -454,6 +465,51 @@ def estimate_revenue_by_employees(employees, industry):
     base = industry_multiplier.get(industry, 100_000)
     return employees * base
 
+
+APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
+
+
+def search_apollo_company(company):
+    """Busca dados da empresa via Apollo.io"""
+    try:
+        url = "https://api.apollo.io/api/v1/mixed_companies/search"
+
+        payload = {
+            "api_key": APOLLO_API_KEY,
+            "q_organization_name": company,
+            "page": 1,
+            "per_page": 1
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache"
+        }
+
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        data = res.json()
+
+        companies = data.get("organizations", [])
+        if not companies:
+            return ""
+
+        c = companies[0]
+
+        # monta texto estilo "snippet"
+        text = f"""
+        {c.get("name")} is a company in the {c.get("industry")} industry.
+        It has approximately {c.get("estimated_num_employees")} employees.
+        """
+
+        
+        if c.get("estimated_annual_revenue"):
+            text += f" Estimated annual revenue: {c.get('estimated_annual_revenue')}."
+
+        return text
+
+    except Exception as e:
+        print(f"[APOLLO ERROR] {company}: {e}")
+        return ""
 
 def process_company(company: str):
     now = time.time()
