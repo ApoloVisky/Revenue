@@ -378,12 +378,12 @@ def search_company_data(company):
 # ----------------------------
 def extract_or_estimate(company, text):
     if not text or len(text) < 50:
-    return {
-        "revenue": None,
-        "employees": None,
-        "industry": None,
-        "estimated": True
-    }
+        return {
+            "revenue": None,
+            "employees": None,
+            "industry": None,
+            "estimated": True
+         }
 
     prompt = f"""Return ONLY a JSON object. No explanation, no markdown, no extra text.
 
@@ -454,7 +454,7 @@ def process_company(company: str):
             )
         if revenue_usd:
             data["estimated"] = True
-            
+
         industry_pt = translate_industry(data.get("industry") if data else None)
 
         # validação por indústria
