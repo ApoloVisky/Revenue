@@ -27,9 +27,13 @@ def get_key_skip_options(request: Request):
         return "options-preflight"
     return get_remote_address(request)
 
-limiter = Limiter(
-    key_func=lambda request: get_remote_address(request) if request.method != "OPTIONS" else "skip"
-)
+def get_key(request: Request):
+    if request.method == "OPTIONS":
+        return None  # ignora completamente
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=get_key)
+
 app = FastAPI()
 
 @app.exception_handler(RateLimitExceeded)
@@ -38,11 +42,15 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://revenue-tau.vercel.app", "http://localhost:3000"],
+    allow_origins=[
+        "https://revenue-tau.vercel.app",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
@@ -639,9 +647,7 @@ def batch(request: Request, companies: list[str], user=Depends(get_current_user)
 
 @app.post("/batch/export")
 
-@app.options("/{rest_of_path:path}")
-async def preflight_handler():
-    return {}
+
 
 @limiter.limit("10/minute")
 def batch_export(request: Request, companies: list[str], user=Depends(get_current_user)):
