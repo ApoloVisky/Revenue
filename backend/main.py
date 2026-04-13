@@ -8,12 +8,14 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-import bcrypt
+from passlib.context import CryptContext
 import time, requests, os, json, re, csv, io
 from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
