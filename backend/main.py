@@ -458,9 +458,6 @@ def call_ai(prompt):
     return None
 
 def calculate_confidence(revenue_source: str, apollo_data: dict, has_serp: bool) -> float:
-    """
-    revenue_source: 'apollo_direct' | 'apollo_range' | 'ai_from_serp' | 'regex' | 'none'
-    """
     scores = {
         "apollo_direct":  0.95,
         "apollo_range":   0.75,
@@ -468,14 +465,18 @@ def calculate_confidence(revenue_source: str, apollo_data: dict, has_serp: bool)
         "regex":          0.35,
         "none":           0.1,
     }
+
     score = scores.get(revenue_source, 0.1)
 
-    # bônus por dados complementares do Apollo
-    if apollo_data.get("employees"):  score = min(score + 0.02, 1.0)
-    if apollo_data.get("industry"):   score = min(score + 0.01, 1.0)
-    if apollo_data.get("founded"):    score = min(score + 0.01, 1.0)
+    if apollo_data.get("employees"):
+        score += 0.02
+    if apollo_data.get("industry"):
+        score += 0.01
+    if apollo_data.get("founded"):
+        score += 0.01
 
-    return round(score, 2)
+    return round(min(score, 1.0), 2)
+    
 
 # ----------------------------
 # AMBIGUIDADE
