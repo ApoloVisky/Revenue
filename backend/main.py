@@ -262,7 +262,7 @@ def score_company_match(input_name: str, apollo_org: dict) -> float:
         base_score += 0.05
 
     return min(base_score, 1.0)
-    
+
 # ----------------------------
 # APOLLO (fonte principal)
 # ----------------------------
@@ -282,11 +282,15 @@ def search_apollo(company: str) -> dict:
 
     try:
         res = requests.post(
-            "https://api.apollo.io/api/v1/mixed_companies/search",
-            headers={"Content-Type": "application/json", "Cache-Control": "no-cache"},
+            "https://api.apollo.io/v1/organizations/search",
+            headers={
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache",
+                "X-Api-Key": APOLLO_API_KEY,  # 🔥 IMPORTANTE
+            },
             json={
-                "api_key": APOLLO_API_KEY,
                 "q_organization_name": company,
+                "page": 1,
                 "per_page": 5,
             },
             timeout=10
@@ -299,53 +303,29 @@ def search_apollo(company: str) -> dict:
             CACHE["apollo"][cache_key] = {"data": {}, "time": now}
             return {}
 
-        # 🔥 FUZZY MATCHING REAL
-        scored = []
-        for org in orgs:
-            score = score_company_match(company, org)
-            scored.append((score, org))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        best_score, best_org = scored[0]
-
-        print(f"[APOLLO MATCH] {company} → {best_org.get('name')} (score={best_score:.2f})")
-
-        # threshold mínimo (evita lixo)
-        if best_score < 0.55:
-            print(f"[APOLLO WARNING] Match fraco para {company}")
-        
-        org = best_org
+        org = orgs[0]
 
         data = {
-            "name":          org.get("name"),
-            "employees":     org.get("estimated_num_employees"),
-            "industry":      org.get("industry"),
-            "city":          org.get("city"),
-            "country":       org.get("country"),
-            "linkedin":      org.get("linkedin_url"),
-            "website":       org.get("website_url"),
-            "founded":       org.get("founded_year"),
+            "name": org.get("name"),
+            "employees": org.get("estimated_num_employees"),
+            "industry": org.get("industry"),
+            "city": org.get("city"),
+            "country": org.get("country"),
+            "linkedin": org.get("linkedin_url"),
+            "website": org.get("website_url"),
+            "founded": org.get("founded_year"),
             "revenue_range": org.get("annual_revenue_printed"),
-            "revenue_usd":   org.get("annual_revenue"),
-            "description":   org.get("short_description") or org.get("seo_description"),
-            "keywords":      org.get("keywords", []),
+            "revenue_usd": org.get("annual_revenue"),
+            "description": org.get("short_description"),
         }
 
         CACHE["apollo"][cache_key] = {"data": data, "time": now}
-
-        print(
-            f"[APOLLO OK] {company} → "
-            f"employees={data['employees']}, "
-            f"revenue={data['revenue_usd']}, "
-            f"range={data['revenue_range']}"
-        )
+        print(f"[APOLLO OK] {company} → {data}")
 
         return data
 
     except Exception as e:
         print(f"[APOLLO ERROR] {company}: {e}")
-        CACHE["apollo"][cache_key] = {"data": {}, "time": now}
         return {}
 
 # ----------------------------
@@ -648,6 +628,7 @@ def build_csv(results: list) -> str:
     output.seek(0)
     return output.getvalue()
 
+print("[APOLLO RAW RESPONSE]", res)
 # ----------------------------
 # MODELS
 # ----------------------------
