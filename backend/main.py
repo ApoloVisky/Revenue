@@ -9,6 +9,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 import bcrypt
+from difflib import SequenceMatcher
 import time, requests, os, json, re, csv, io
 from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
@@ -228,12 +229,47 @@ def parse_apollo_revenue_range(range_str: str):
         print(f"[APOLLO RANGE PARSE] {e}")
     return None
 
+
+from difflib import SequenceMatcher
+
+def normalize_company_name(name: str) -> str:
+    if not name:
+        return ""
+    name = name.lower()
+    name = re.sub(r"\b(inc|ltd|llc|corp|co|company|gmbh|sa|s\.a\.|plc)\b", "", name)
+    name = re.sub(r"[^a-z0-9 ]", "", name)
+    return name.strip()
+
+def similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+def score_company_match(input_name: str, apollo_org: dict) -> float:
+    name_input = normalize_company_name(input_name)
+    name_apollo = normalize_company_name(apollo_org.get("name", ""))
+
+    base_score = similarity(name_input, name_apollo)
+
+    # bônus por domínio (muito forte)
+    website = apollo_org.get("website_url") or ""
+    if website:
+        domain = re.sub(r"https?://(www\.)?", "", website).split("/")[0]
+        if name_input.replace(" ", "") in domain:
+            base_score += 0.2
+
+    # leve ajuste por país conhecido
+    country = (apollo_org.get("country") or "").lower()
+    if "brazil" in country or "brasil" in country:
+        base_score += 0.05
+
+    return min(base_score, 1.0)
+    
 # ----------------------------
 # APOLLO (fonte principal)
 # ----------------------------
 def search_apollo(company: str) -> dict:
     now = time.time()
     cache_key = f"apollo_{company.lower()}"
+
     if cache_key in CACHE["apollo"]:
         cached = CACHE["apollo"][cache_key]
         if now - cached["time"] < CACHE_TTL:
@@ -257,17 +293,29 @@ def search_apollo(company: str) -> dict:
         ).json()
 
         orgs = res.get("organizations", [])
+
         if not orgs:
             print(f"[APOLLO] Nenhum resultado para: {company}")
             CACHE["apollo"][cache_key] = {"data": {}, "time": now}
             return {}
 
-        # escolhe o org com nome mais próximo
-        org = orgs[0]
-        for o in orgs:
-            if o.get("name", "").lower() == company.lower():
-                org = o
-                break
+        # 🔥 FUZZY MATCHING REAL
+        scored = []
+        for org in orgs:
+            score = score_company_match(company, org)
+            scored.append((score, org))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        best_score, best_org = scored[0]
+
+        print(f"[APOLLO MATCH] {company} → {best_org.get('name')} (score={best_score:.2f})")
+
+        # threshold mínimo (evita lixo)
+        if best_score < 0.55:
+            print(f"[APOLLO WARNING] Match fraco para {company}")
+        
+        org = best_org
 
         data = {
             "name":          org.get("name"),
@@ -285,7 +333,14 @@ def search_apollo(company: str) -> dict:
         }
 
         CACHE["apollo"][cache_key] = {"data": data, "time": now}
-        print(f"[APOLLO OK] {company} → employees={data['employees']}, revenue={data['revenue_usd']}, range={data['revenue_range']}")
+
+        print(
+            f"[APOLLO OK] {company} → "
+            f"employees={data['employees']}, "
+            f"revenue={data['revenue_usd']}, "
+            f"range={data['revenue_range']}"
+        )
+
         return data
 
     except Exception as e:
