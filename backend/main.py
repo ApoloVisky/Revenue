@@ -35,15 +35,14 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://revenue-tau.vercel.app",
-    ],
+    allow_origins=["https://revenue-tau.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.state.limiter = limiter
+
 app.add_middleware(SlowAPIMiddleware)
+app.state.limiter = limiter
 
 # ----------------------------
 # SUPABASE
