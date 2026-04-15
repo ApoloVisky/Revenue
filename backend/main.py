@@ -611,9 +611,9 @@ TEXT: {serp_text}"""
 
                 # regex como último recurso
                 if not revenue_usd:
-                    def validate_revenue_by_size(revenue, employees):
-    if not revenue or not employees:
-        return revenue, False
+    def validate_revenue_by_size(revenue, employees):
+        if not revenue or not employees:
+            return revenue, False
 
     # receita por funcionário (benchmark)
     rev_per_employee = revenue / employees
