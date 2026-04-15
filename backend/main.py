@@ -170,13 +170,21 @@ def translate_industry(industry):
             return value
     return industry.title()
 
-def validate_revenue_by_industry(revenue, industry_pt):
-    if not revenue or not industry_pt:
+def validate_revenue_by_size(revenue, employees):
+    if not revenue or not employees:
         return revenue, False
-    range_ = INDUSTRY_REVENUE_RANGES.get(industry_pt)
-    if range_ and not (range_[0] <= revenue <= range_[1]):
-        print(f"[REVENUE SUSPEITO] {revenue:,.0f} fora do range para {industry_pt}")
+
+    # receita por funcionário (benchmark)
+    rev_per_employee = revenue / employees
+
+    # limites razoáveis
+    if rev_per_employee > 5_000_000:  # > $5M por funcionário = suspeito
+        print(f"[SUSPEITO] Receita por funcionário muito alta: {rev_per_employee:,.0f}")
         return None, True
+
+    if rev_per_employee < 1_000:  # muito baixo também é estranho
+        return None, True
+
     return revenue, False
 
 def classify_company(revenue):
@@ -599,7 +607,22 @@ TEXT: {serp_text}"""
                             pass
 
                 # regex como último recurso
-                if not revenue_usd:
+                if not revenue_usd:def validate_revenue_by_size(revenue, employees):
+    if not revenue or not employees:
+        return revenue, False
+
+    # receita por funcionário (benchmark)
+    rev_per_employee = revenue / employees
+
+    # limites razoáveis
+    if rev_per_employee > 5_000_000:  # > $5M por funcionário = suspeito
+        print(f"[SUSPEITO] Receita por funcionário muito alta: {rev_per_employee:,.0f}")
+        return None, True
+
+    if rev_per_employee < 1_000:  # muito baixo também é estranho
+        return None, True
+
+    return revenue, False
                     rev = extract_revenue_fallback(serp_text)
                     if rev:
                         revenue_usd    = rev
