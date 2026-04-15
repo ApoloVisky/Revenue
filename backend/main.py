@@ -37,7 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://revenue-tau.vercel.app",
-        "http://localhost:3000",
+        "http://localhost:3000"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -516,6 +516,7 @@ Return ONLY the JSON array, no explanation."""
 # ----------------------------
 def process_company(company: str) -> dict:
     now = time.time()
+
     if company in CACHE["company"]:
         cached = CACHE["company"][company]
         if now - cached["time"] < CACHE_TTL:
@@ -523,142 +524,101 @@ def process_company(company: str) -> dict:
             return cached["data"]
 
     try:
-        # 1. Apollo sempre primeiro
         apollo = search_apollo(company)
 
-        revenue_usd    = None
+        revenue_usd = None
         revenue_source = "none"
-        employees      = apollo.get("employees")
-        industry_raw   = apollo.get("industry")
-        estimated      = True
+        employees = apollo.get("employees")
+        industry_raw = apollo.get("industry")
+        estimated = True
 
-        # 2. Apollo tem revenue direto?
+        # 1. revenue direto
         if apollo.get("revenue_usd"):
             try:
                 rev = float(apollo["revenue_usd"])
                 if 10_000 <= rev <= 5_000_000_000_000:
-                    revenue_usd    = rev
+                    revenue_usd = rev
                     revenue_source = "apollo_direct"
-                    estimated      = False
-                    print(f"[REVENUE] Apollo direto: ${rev:,.0f}")
+                    estimated = False
             except:
                 pass
 
-        # 3. Apollo tem range? (ex: "$10M-$50M")
+        # 2. revenue por range
         if not revenue_usd and apollo.get("revenue_range"):
             rev = parse_apollo_revenue_range(apollo["revenue_range"])
-            if rev and 10_000 <= rev <= 5_000_000_000_000:
-                revenue_usd    = rev
+            if rev:
+                revenue_usd = rev
                 revenue_source = "apollo_range"
-                estimated      = True
-                print(f"[REVENUE] Apollo range '{apollo['revenue_range']}': ${rev:,.0f}")
+                estimated = True
 
-        # 4. Fallback: SerpAPI + AI
+        # 3. fallback SERP + AI
+        serp_text = None
+
         if not revenue_usd:
             serp_text = search_serp_fallback(company)
+
             if serp_text and len(serp_text) > 50:
-                # monta contexto Apollo pro AI
-                apollo_ctx = ""
-                if apollo:
-                    parts = []
-                    if employees:    parts.append(f"employees: {employees}")
-                    if industry_raw: parts.append(f"industry: {industry_raw}")
-                    if apollo.get("founded"): parts.append(f"founded: {apollo['founded']}")
-                    if apollo.get("country"): parts.append(f"country: {apollo['country']}")
-                    if parts:
-                        apollo_ctx = f"\nApollo.io data: {', '.join(parts)}\n"
-
-                prompt = f"""Return ONLY a JSON object. No explanation, no markdown.
-
-Examples:
-Text: "Apple annual revenue $391 billion fiscal 2024, 150,000 employees, technology."
-Output: {{"revenue": 391000000000, "employees": 150000, "industry": "Technology", "estimated": false}}
-
-Text: "Petrobras net revenue R$502 billion 2023, 45,000 workers, oil."
-Output: {{"revenue": 90000000000, "employees": 45000, "industry": "Energy", "estimated": true}}
-
-Text: "Q3 revenue $2.5 billion software."
-Output: {{"revenue": 10000000000, "employees": null, "industry": "Software", "estimated": true}}
-
-Rules:
-- revenue ANNUAL in USD, plain number
-- quarterly → multiply by 4, estimated true
-- BRL → divide by 5.7, estimated true
-- use most recent fiscal year
-{apollo_ctx}
-Return: {{"revenue": <number or null>, "employees": <number or null>, "industry": "<English string or null>", "estimated": <true or false>}}
+                prompt = f"""
+Return ONLY a JSON object.
 
 Company: {company}
-TEXT: {serp_text}"""
+TEXT: {serp_text}
+
+Format:
+{{"revenue": number, "employees": number, "industry": "string", "estimated": true/false}}
+"""
 
                 content = call_ai(prompt)
+
                 if content:
                     parsed = safe_json_parse(content)
                     if parsed and parsed.get("revenue"):
                         try:
-                            rev = float(parsed["revenue"])
-                            if 10_000 <= rev <= 5_000_000_000_000:
-                                revenue_usd    = rev
-                                revenue_source = "ai_from_serp"
-                                estimated      = parsed.get("estimated", True)
-                                if not employees and parsed.get("employees"):
-                                    employees = parsed["employees"]
-                                if not industry_raw and parsed.get("industry"):
-                                    industry_raw = parsed["industry"]
-                                print(f"[REVENUE] AI from SERP: ${rev:,.0f}")
+                            revenue_usd = float(parsed["revenue"])
+                            revenue_source = "ai_from_serp"
+                            estimated = parsed.get("estimated", True)
+
+                            if not employees:
+                                employees = parsed.get("employees")
+
+                            if not industry_raw:
+                                industry_raw = parsed.get("industry")
+
                         except:
                             pass
 
-                # regex como último recurso
-                if not revenue_usd:
-    def validate_revenue_by_size(revenue, employees):
-        if not revenue or not employees:
-            return revenue, False
+        # 4. regex fallback
+        if not revenue_usd and serp_text:
+            rev = extract_revenue_fallback(serp_text)
+            if rev:
+                revenue_usd = rev
+                revenue_source = "regex"
+                estimated = True
 
-    # receita por funcionário (benchmark)
-    rev_per_employee = revenue / employees
-
-    # limites razoáveis
-    if rev_per_employee > 5_000_000:  # > $5M por funcionário = suspeito
-        print(f"[SUSPEITO] Receita por funcionário muito alta: {rev_per_employee:,.0f}")
-        return None, True
-
-    if rev_per_employee < 1_000:  # muito baixo também é estranho
-        return None, True
-
-    return revenue, False
-                    rev = extract_revenue_fallback(serp_text)
-                    if rev:
-                        revenue_usd    = rev
-                        revenue_source = "regex"
-                        estimated      = True
-                        print(f"[REVENUE] Regex fallback: ${rev:,.0f}")
-
-        # 5. industry e validação
-        industry_pt = translate_industry(industry_raw)
-        revenue_usd, suspicious = validate_revenue_by_industry(revenue_usd, industry_pt)
+        # 5. validação por tamanho
+        revenue_usd, suspicious = validate_revenue_by_size(revenue_usd, employees)
         if suspicious:
             revenue_source = "none"
 
+        industry_pt = translate_industry(industry_raw)
         revenue_brl = convert_to_brl(revenue_usd)
 
         response = {
-            "empresa":         company,
+            "empresa": company,
             "faturamento_usd": revenue_usd,
             "faturamento_brl": format_brl(revenue_brl),
-            "estimado":        estimated,
-            "funcionarios":    employees,
-            "industria":       industry_pt,
-            "confianca":       calculate_confidence(revenue_source, apollo, revenue_source != "none"),
-            "classificacao":   classify_company(revenue_brl),
-            "fonte":           revenue_source,
-            # campos Apollo extras
-            "cidade":          apollo.get("city"),
-            "pais":            apollo.get("country"),
-            "linkedin":        apollo.get("linkedin"),
-            "website":         apollo.get("website"),
-            "fundada":         apollo.get("founded"),
-            "descricao":       apollo.get("description"),
+            "estimado": estimated,
+            "funcionarios": employees,
+            "industria": industry_pt,
+            "confianca": calculate_confidence(revenue_source, apollo, revenue_source != "none"),
+            "classificacao": classify_company(revenue_usd),  # corrigido
+            "fonte": revenue_source,
+            "cidade": apollo.get("city"),
+            "pais": apollo.get("country"),
+            "linkedin": apollo.get("linkedin"),
+            "website": apollo.get("website"),
+            "fundada": apollo.get("founded"),
+            "descricao": apollo.get("description"),
         }
 
         CACHE["company"][company] = {"data": response, "time": now}
@@ -667,7 +627,7 @@ TEXT: {serp_text}"""
     except Exception as e:
         print(f"[COMPANY ERROR] {company}: {e}")
         return {"empresa": company, "erro": str(e)}
-
+        
 def build_csv(results: list) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
@@ -843,22 +803,30 @@ def company_endpoint(request: Request, company: str, user=Depends(get_current_us
 @limiter.limit("10/minute")
 def batch(request: Request, companies: list[str], user=Depends(get_current_user)):
     remaining = user["credits_limit"] - user["credits_used"]
+
     if len(companies) > remaining:
-        raise HTTPException(status_code=429, detail=f"Créditos insuficientes. Você tem {remaining} crédito(s) e tentou buscar {len(companies)} empresa(s).")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Créditos insuficientes. Você tem {remaining} e tentou buscar {len(companies)}"
+        )
+
     def safe_process(company):
-    try:
-        return process_company(company)
-    except Exception as e:
-        print(f"[BATCH ERROR] {company}: {e}")
-        return {"empresa": company, "erro": str(e)}
+        try:
+            return process_company(company)
+        except Exception as e:
+            print(f"[BATCH ERROR] {company}: {e}")
+            return {"empresa": company, "erro": str(e)}
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(safe_process, companies))
+
     for _ in companies:
         consume_credit(user["id"])
-    log_search(user["id"], companies)
-    return results
 
+    log_search(user["id"], companies)
+
+    return results
+    
 @app.post("/batch/export")
 @limiter.limit("10/minute")
 def batch_export(request: Request, companies: list[str], user=Depends(get_current_user)):
