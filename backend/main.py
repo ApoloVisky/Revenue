@@ -610,7 +610,8 @@ TEXT: {serp_text}"""
                             pass
 
                 # regex como último recurso
-                if not revenue_usd:def validate_revenue_by_size(revenue, employees):
+                if not revenue_usd:
+                    def validate_revenue_by_size(revenue, employees):
     if not revenue or not employees:
         return revenue, False
 
