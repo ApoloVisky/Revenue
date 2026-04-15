@@ -35,7 +35,10 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://revenue-tau.vercel.app"],
+    allow_origins=[
+        "https://revenue-tau.vercel.app",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -841,8 +844,15 @@ def batch(request: Request, companies: list[str], user=Depends(get_current_user)
     remaining = user["credits_limit"] - user["credits_used"]
     if len(companies) > remaining:
         raise HTTPException(status_code=429, detail=f"Créditos insuficientes. Você tem {remaining} crédito(s) e tentou buscar {len(companies)} empresa(s).")
+    def safe_process(company):
+    try:
+        return process_company(company)
+    except Exception as e:
+        print(f"[BATCH ERROR] {company}: {e}")
+        return {"empresa": company, "erro": str(e)}
+
     with ThreadPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(process_company, companies))
+        results = list(executor.map(safe_process, companies))
     for _ in companies:
         consume_credit(user["id"])
     log_search(user["id"], companies)
