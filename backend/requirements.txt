@@ -76,4 +76,3 @@ websockets==15.0.1
 wrapt==2.1.2
 bcrypt==4.1.2
 passlib[bcrypt]
-difflib
