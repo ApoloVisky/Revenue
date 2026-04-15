@@ -394,8 +394,10 @@ def search_serp_fallback(company: str) -> str:
     try:
         res = requests.get(
             "https://serpapi.com/search",
-            params={"q": f"{company} annual revenue fiscal year 2024", "api_key": SERP_API_KEY},
-            timeout=10
+            params={
+                    "q": f"{company} revenue 2024 annual revenue {company} total revenue",
+                    "api_key": SERP_API_KEY
+                }
         ).json()
         snippets = [r.get("snippet", "") for r in res.get("organic_results", [])[:5]]
     except Exception as e:
@@ -489,18 +491,24 @@ def detect_ambiguity(company):
         if now - cached["time"] < CACHE_TTL:
             return cached["data"]
 
-    prompt = f"""The user is searching for a company named "{company}".
+    prompt = f"""
+Extract the ANNUAL revenue of the company from the text.
 
-Are there multiple well-known companies with this exact name that could cause confusion?
+Rules:
+- Return revenue in USD (number only)
+- If value is in billions, convert (e.g. 211 billion → 211000000000)
+- If multiple values exist, pick the most recent annual revenue
+- If quarterly, multiply by 4
+- If BRL, divide by 5.7
 
-If YES, return a JSON array with up to 4 options:
-- "name": official company name
-- "description": one short sentence (country, industry, what they do)
-- "country": country of headquarters
+Return ONLY JSON:
+{{"revenue": number or null}}
 
-If NO ambiguity, return [].
+Company: {company}
 
-Return ONLY the JSON array, no explanation."""
+TEXT:
+{serp_text}
+"""
 
     content = call_ai(prompt)
     options = None
