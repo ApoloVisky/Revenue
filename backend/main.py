@@ -267,6 +267,19 @@ def score_company_match(input_name: str, apollo_org: dict) -> float:
 # ----------------------------
 # APOLLO (fonte principal)
 # ----------------------------
+def clean_company_name(name: str) -> str:
+    name = name.lower()
+    name = re.sub(r"\b(inc|ltd|llc|corp|corporation|company|co)\b\.?,?", "", name)
+    name = re.sub(r"[^\w\s]", "", name)
+    return name.strip()
+
+
+def extract_domain(name: str):
+    name = name.lower()
+    name = name.replace(" ", "")
+    return f"{name}.com"
+
+
 def search_apollo(company: str) -> dict:
     now = time.time()
     cache_key = f"apollo_{company.lower()}"
@@ -282,16 +295,17 @@ def search_apollo(company: str) -> dict:
         return {}
 
     try:
+        clean_name = clean_company_name(company)
+
+        # ------------------------
+        # 1ª tentativa: nome limpo
+        # ------------------------
         res = requests.post(
-            "https://api.apollo.io/v1/organizations/search",
-            headers={
-                "Content-Type": "application/json",
-                "Cache-Control": "no-cache",
-                "X-Api-Key": APOLLO_API_KEY,  # 🔥 IMPORTANTE
-            },
+            "https://api.apollo.io/api/v1/mixed_companies/search",
+            headers={"Content-Type": "application/json"},
             json={
-                "q_organization_name": company,
-                "page": 1,
+                "api_key": APOLLO_API_KEY,
+                "q_organization_name": clean_name,
                 "per_page": 5,
             },
             timeout=10
@@ -299,36 +313,58 @@ def search_apollo(company: str) -> dict:
 
         orgs = res.get("organizations", [])
 
+        # ------------------------
+        # 2ª tentativa: domínio
+        # ------------------------
+        if not orgs:
+            domain = extract_domain(clean_name)
+            print(f"[APOLLO FALLBACK DOMAIN] {domain}")
+
+            res = requests.post(
+                "https://api.apollo.io/api/v1/mixed_companies/search",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "api_key": APOLLO_API_KEY,
+                    "q_organization_domains": [domain],
+                    "per_page": 5,
+                },
+                timeout=10
+            ).json()
+
+            orgs = res.get("organizations", [])
+
         if not orgs:
             print(f"[APOLLO] Nenhum resultado para: {company}")
             CACHE["apollo"][cache_key] = {"data": {}, "time": now}
             return {}
 
+        # pega melhor match
         org = orgs[0]
 
-        print("[APOLLO RAW RESPONSE]", res)
-
         data = {
-            "name": org.get("name"),
-            "employees": org.get("estimated_num_employees"),
-            "industry": org.get("industry"),
-            "city": org.get("city"),
-            "country": org.get("country"),
-            "linkedin": org.get("linkedin_url"),
-            "website": org.get("website_url"),
-            "founded": org.get("founded_year"),
+            "name":          org.get("name"),
+            "employees":     org.get("estimated_num_employees"),
+            "industry":      org.get("industry"),
+            "city":          org.get("city"),
+            "country":       org.get("country"),
+            "linkedin":      org.get("linkedin_url"),
+            "website":       org.get("website_url"),
+            "founded":       org.get("founded_year"),
             "revenue_range": org.get("annual_revenue_printed"),
-            "revenue_usd": org.get("annual_revenue"),
-            "description": org.get("short_description"),
+            "revenue_usd":   org.get("annual_revenue"),
+            "description":   org.get("short_description") or org.get("seo_description"),
+            "keywords":      org.get("keywords", []),
         }
 
         CACHE["apollo"][cache_key] = {"data": data, "time": now}
-        print(f"[APOLLO OK] {company} → {data}")
+
+        print(f"[APOLLO OK] {company} → {data['name']} | revenue={data['revenue_usd']}")
 
         return data
 
     except Exception as e:
         print(f"[APOLLO ERROR] {company}: {e}")
+        CACHE["apollo"][cache_key] = {"data": {}, "time": now}
         return {}
 
 # ----------------------------
