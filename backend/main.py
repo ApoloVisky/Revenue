@@ -306,6 +306,8 @@ def search_apollo(company: str) -> dict:
 
         org = orgs[0]
 
+        print("[APOLLO RAW RESPONSE]", res)
+
         data = {
             "name": org.get("name"),
             "employees": org.get("estimated_num_employees"),
@@ -629,7 +631,6 @@ def build_csv(results: list) -> str:
     output.seek(0)
     return output.getvalue()
 
-print("[APOLLO RAW RESPONSE]", res)
 # ----------------------------
 # MODELS
 # ----------------------------
